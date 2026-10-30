@@ -1,0 +1,7 @@
+﻿name: astrbot_plugin_group_dm_guide
+display_name: 群聊高频提问引导
+desc: 同一人在群里连续问太多次时，把回答私聊发给他；私聊不通则拦截群回复只留提示
+version: 1.3.1
+author: DSH (AI)
+repo: https://github.com/czacdat/astrbot_plugin_group_dm_guide
+astrbot_version: ">=4.24.0"

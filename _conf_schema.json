@@ -1,0 +1,108 @@
+{
+  "enable": {
+    "description": "启用群聊高频提问引导",
+    "hint": "关闭后插件完全不工作",
+    "type": "bool",
+    "default": true
+  },
+  "redirect_reply": {
+    "description": "把回答私聊发给提问者",
+    "hint": "开启（推荐）：超过阈值后在群里不再回答，而是把这条回答私聊发给他，群里只留一句提示。关闭：改为在群里发一句引导语，冷却期内不响应",
+    "type": "bool",
+    "default": true
+  },
+  "enable_temp_session": {
+    "description": "允许使用群临时会话",
+    "hint": "好友私聊发不出去时，尝试用「群临时会话」发送（send_private_msg + group_id）。需要群设置允许临时会话、且对方隐私设置允许，成功率不固定",
+    "type": "bool",
+    "default": true
+  },
+  "min_redirect_chars": {
+    "description": "回答超过多少字才转私聊",
+    "hint": "回答字数少于这个值时照常留在群里（短回复没必要挪地方）。设 0 表示不限制",
+    "type": "int",
+    "default": 10,
+    "slider": { "min": 0, "max": 200, "step": 5 }
+  },
+  "intercept_on_fail": {
+    "description": "私聊发不出去时也拦截",
+    "hint": "开启（推荐）：私聊失败就把群回复拦掉，只留一句提示。关闭：退回到群里正常回答",
+    "type": "bool",
+    "default": true
+  },
+  "blocked_notice": {
+    "description": "拦截群回复时的提示",
+    "hint": "私聊发不出去、群回复又被拦掉时，群里说这一句。留空则完全不说话",
+    "type": "text",
+    "default": "（这些私聊说吧，群里不方便）"
+  },
+  "group_notice": {
+    "description": "转私聊后群里留的提示",
+    "hint": "私聊发送成功后，在群里说这一句。留空则完全不说话",
+    "type": "text",
+    "default": "（这里不方便说，私聊发你了）"
+  },
+  "fallback_notice": {
+    "description": "私聊发不出去时的提示",
+    "hint": "对方还不是好友、QQ 不允许私聊时，回答会退回群里，并补这一句。留空则只退回、不提示",
+    "type": "text",
+    "default": "（加我好友才能私聊哦）"
+  },
+  "trigger_count": {
+    "description": "触发次数",
+    "hint": "同一个人在时间窗内问了多少次后开始引导",
+    "type": "int",
+    "default": 3,
+    "slider": { "min": 2, "max": 20, "step": 1 }
+  },
+  "window_minutes": {
+    "description": "统计时间窗（分钟）",
+    "hint": "只统计这段时间内的提问次数",
+    "type": "int",
+    "default": 10,
+    "slider": { "min": 1, "max": 120, "step": 1 }
+  },
+  "cooldown_minutes": {
+    "description": "冷却时长（分钟）",
+    "hint": "引导之后多久内不再理他。设为 0 表示不冷却（每次超阈值都提醒）",
+    "type": "int",
+    "default": 30,
+    "slider": { "min": 0, "max": 1440, "step": 5 }
+  },
+  "block_during_cooldown": {
+    "description": "冷却期内不响应群消息",
+    "hint": "开启后冷却期内在群里完全不回他；关闭则只是不再重复提醒，仍然正常回答",
+    "type": "bool",
+    "default": true
+  },
+  "message": {
+    "description": "引导语",
+    "hint": "可用占位符：{count} 本次次数、{minutes} 时间窗分钟数。默认话术带「加我好友」，因为群友未经好友关系无法私聊",
+    "type": "text",
+    "default": "……你问题有点多啦，群里说不太方便，加我好友私聊说吧。"
+  },
+  "exempt_admins": {
+    "description": "管理员豁免",
+    "hint": "管理员（AstrBot 配置里的 admins_id，含你自己）不受限制",
+    "type": "bool",
+    "default": true
+  },
+  "whitelist": {
+    "description": "用户白名单",
+    "hint": "填 QQ 号，每行一个或逗号分隔。名单内的人不受限制",
+    "type": "list",
+    "default": []
+  },
+  "group_whitelist": {
+    "description": "生效的群号",
+    "hint": "留空 = 所有群生效。填了则只在列出的群里生效",
+    "type": "list",
+    "default": []
+  },
+  "dry_run": {
+    "description": "只记日志不拦截",
+    "hint": "开启后只在日志里记录「本应触发」，不发送引导、不阻止回复。用来先观察判断是否准确",
+    "type": "bool",
+    "default": false
+  }
+}
