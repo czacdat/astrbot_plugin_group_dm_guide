@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """群聊高频提问引导插件。
 
 两种模式：
@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 import time
 
 from astrbot.api import logger
@@ -35,11 +37,155 @@ DEFAULT_BLOCKED_NOTICE = "（这些私聊说吧，群里不方便）"
 _EXTRA_REDIRECT = "_group_dm_guide_redirect"
 
 
+# --------------------------------------------------------------------------- #
+# 提问识别
+#
+# 强信号（默认算提问）：
+#   · 句尾问号 ？ ?
+#   · 「吗」结尾
+#   · 明确求助词：请问 / 请教 / 求问 / 求助 / 有人知道 / 谁知道 / 帮我 …
+# 弱信号（默认不算，可选开启）：
+#   · 只出现疑问词：什么 / 怎么 / 为什么 / 哪里 / 多少 / 是不是 / 有没有 …
+#
+# 误判防护（用真实群聊记录校准过）：
+#   · 先剥掉 [引用消息(...)] —— 引用里的问号不是当前人的提问
+#   · 剥掉 [At:xxx]、@昵称、（动作）、[图片] 等标记
+#   · 单独一个「？」「？？」是惊讶，不算提问
+#   · 「？！」「！？」组合是感叹，不算提问
+# --------------------------------------------------------------------------- #
+
+STRONG_REQUEST_WORDS = (
+    "请问", "请教", "求问", "问一下", "问下", "想问",
+    "求助", "有人知道", "有人会", "谁知道", "谁会", "有大佬",
+    "帮我", "帮忙", "教教我", "教一下",
+)
+
+WEAK_QUESTION_WORDS = (
+    "什么", "怎么", "怎样", "为什么", "为啥", "如何",
+    "哪里", "哪个", "哪儿", "哪位", "在哪",
+    "多少", "几个", "多久", "多大", "多长",
+    "是否", "能否", "能不能", "可不可以", "是不是", "有没有",
+    "会不会", "要不要", "行不行", "对不对", "好不好",
+    "咋办", "咋样", "怎么办", "咋整", "咋弄",
+    "是什么", "有什么",
+)
+
+# 感叹/吐槽信号：出现时不把弱信号当提问
+EXCLAMATION_WORDS = (
+    "哈哈", "笑死", "草", "绝了", "好家伙", "绷不住", "离谱", "服了",
+    "泪目", "逆天", "卧槽", "我哭", "乐死", "太", "这么", "那么", "真",
+)
+
+# 反问信号：不是在求答案
+RHETORICAL_MARKERS = ("怎么可能", "怎么会", "难道", "不至于", "哪有")
+
+GREETINGS = frozenset(
+    {
+        "在吗", "在不在", "在么", "你好", "您好", "hi", "hello", "嗨",
+        "谢谢", "谢了", "多谢", "感谢", "好的", "好", "行", "可以",
+        "嗯", "嗯嗯", "哦", "哦哦", "收到", "了解", "明白", "知道了",
+        "ok", "okay", "早", "早上好", "晚安", "拜拜", "再见",
+        "对", "是", "不是", "没有", "有",
+    }
+)
+
+_QUOTE_RE = re.compile(r"\[引用消息.*?\)\]", re.DOTALL)
+_AT_TAG_RE = re.compile(r"\[At:[^\]]*\]")
+_MEDIA_TAG_RE = re.compile(r"\[(?:图片|表情|语音|视频|文件|ComponentType[^\]]*)\]")
+_MENTION_RE = re.compile(r"@\S+")
+_ACTION_RE = re.compile(r"[（(][^）)]{0,40}[）)]")
+_EMOJI_ONLY_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
+_PUNCT_RE = re.compile(r"[，,。.！!、~～\s]+")
+
+
+def strip_decorations(text: str) -> str:
+    """剥掉引用、@、图片标记、动作描写，留下当前人真正说的话。"""
+    s = str(text or "")
+    s = _QUOTE_RE.sub("", s)      # 引用消息整段（里面可能有问号）
+    s = _AT_TAG_RE.sub("", s)     # [At:123]
+    s = _MEDIA_TAG_RE.sub("", s)  # [图片] 等
+    s = _MENTION_RE.sub("", s)    # @昵称
+    s = _ACTION_RE.sub("", s)     # （动作）
+    return s.strip()
+
+
+def count_spoken_chars(text: str) -> int:
+    """统计「真正说出口」的字数。
+
+    不算 @ 昵称、引用内容、图片标记、动作描写——被 @ 的人名不该算进回答字数。
+    """
+    return len(_PUNCT_RE.sub("", strip_decorations(text)))
+
+
+def detect_question(text: str, extra_words: tuple[str, ...] = ()) -> tuple[bool, str]:
+    """强信号提问判断。返回 (是否提问, 理由)。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return False, "empty"
+
+    s = strip_decorations(raw)
+    if not s:
+        return False, "only_mention_or_action"
+    if _EMOJI_ONLY_RE.match(s):
+        return False, "emoji_only"
+
+    core = _PUNCT_RE.sub("", s).lower()
+    if not core:
+        return False, "punct_only"
+    if core in GREETINGS:
+        return False, "greeting"
+    if any(w in s for w in RHETORICAL_MARKERS):
+        return False, "rhetorical"
+
+    # 强信号 1：句尾问号（必须句尾，且整句至少 3 字）
+    if s.endswith(("？！", "！？", "?!", "!?")):
+        return False, "exclam_question"
+    if s.endswith(("？", "?")):
+        return (True, "question_mark") if len(core) >= 3 else (False, "bare_question_mark")
+
+    # 强信号 2：「吗」结尾
+    if core.endswith("吗"):
+        return True, "ends_with_ma"
+
+    # 强信号 3：明确求助词（含用户自定义词）
+    for w in tuple(STRONG_REQUEST_WORDS) + tuple(extra_words):
+        if w and w in s:
+            return True, "request:" + w
+
+    return False, "none"
+
+
+def detect_weak_question(
+    text: str, extra_words: tuple[str, ...] = ()
+) -> tuple[bool, str]:
+    """弱信号提问判断（仅在开启「疑问词也算」时使用）。"""
+    ok, reason = detect_question(text, extra_words)
+    if ok:
+        return True, reason
+
+    s = strip_decorations(text)
+    if not s:
+        return False, "no_text"
+
+    core = _PUNCT_RE.sub("", s).lower()
+    if len(core) <= 2:
+        return False, "too_short"
+    if any(w in s for w in RHETORICAL_MARKERS):
+        return False, "rhetorical"
+    if any(w in s for w in EXCLAMATION_WORDS):
+        return False, "exclamation"
+
+    hits = [w for w in WEAK_QUESTION_WORDS if w in s]
+    if hits:
+        return True, "weak:" + hits[0]
+    return False, "none"
+
+
 @register(
     "astrbot_plugin_group_dm_guide",
     "DSH",
     "群聊高频提问引导：同一人在群里问太多次后，把回答私聊发给他；可选冷却期不响应",
-    "1.1.0",
+    "1.5.0",
 )
 class GroupDmGuidePlugin(Star):
     """把群里的高频提问者引导到私聊。"""
@@ -80,6 +226,21 @@ class GroupDmGuidePlugin(Star):
         self.min_redirect_chars = max(0, int(cfg.get("min_redirect_chars") or 0))
         # 私聊发不出去时：仍然拦截群回复，只留提示（否则退回群里正常回答）
         self.intercept_on_fail = bool(cfg.get("intercept_on_fail", True))
+        # 群里提示语的限频：同一个人在这个时间内只提示一次（0 = 不限）
+        self.notice_cooldown_minutes = max(
+            0, int(cfg.get("notice_cooldown_minutes") or 0)
+        )
+        # 私聊失败后是否隔一会儿再试一次（应对临时网络抖动）
+        self.retry_private_once = bool(cfg.get("retry_private_once", True))
+
+        # 只统计「提问」：日常闲聊不计数、也不转私聊
+        self.only_questions = bool(cfg.get("only_questions", True))
+        # 疑问词（什么/怎么/为什么…）单独出现是否也算提问。默认不算，误报高
+        self.count_weak_questions = bool(cfg.get("count_weak_questions", False))
+        # 用户自定义的额外提问关键词（命中即算提问）
+        self.extra_question_words = tuple(
+            str(x).strip() for x in (cfg.get("extra_question_words") or []) if str(x).strip()
+        )
 
         self.whitelist = {str(x).strip() for x in (cfg.get("whitelist") or []) if str(x).strip()}
         self.group_whitelist = {
@@ -88,17 +249,25 @@ class GroupDmGuidePlugin(Star):
 
         self._hits: dict[str, list[float]] = {}
         self._cooldown: dict[str, float] = {}
+        # 提示语限频：key -> 上次提示时间
+        self._notice_at: dict[str, float] = {}
         self._last_prune = time.time()
 
         logger.info(
-            "[群聊引导] 已加载: 模式=%s, 阈值=%s次/%s分钟, 冷却=%s分钟, 最短转私聊=%s字, 私聊失败拦截=%s, dry_run=%s",
+            "[群聊引导] 已加载: 模式=%s, 阈值=%s次/%s分钟, 冷却=%s分钟, 最短转私聊=%s字, "
+            "私聊失败拦截=%s, 提示限频=%s分钟, dry_run=%s, "
+            "只统计提问=%s(弱信号=%s, 自定义词=%s个)",
             "转私聊" if self.redirect_reply else "发引导语",
             self.trigger_count,
             self.window_minutes,
             self.cooldown_minutes,
             self.min_redirect_chars,
             self.intercept_on_fail,
+            self.notice_cooldown_minutes,
             self.dry_run,
+            self.only_questions,
+            self.count_weak_questions,
+            len(self.extra_question_words),
         )
 
     # ------------------------------------------------------------------ #
@@ -107,6 +276,18 @@ class GroupDmGuidePlugin(Star):
     @staticmethod
     def _key(group_id: str, user_id: str) -> str:
         return f"{group_id}|{user_id}"
+
+    def _is_question(self, event: AstrMessageEvent) -> tuple[bool, str]:
+        """判断本轮消息是不是提问。返回 (是否提问, 理由)。"""
+        try:
+            text = str(getattr(event, "message_str", "") or "")
+        except Exception:  # noqa: BLE001
+            return False, "no_text"
+
+        if self.count_weak_questions:
+            return detect_weak_question(text, self.extra_question_words)
+        return detect_question(text, self.extra_question_words)
+
 
     def _render(self, count: int) -> str:
         try:
@@ -128,6 +309,23 @@ class GroupDmGuidePlugin(Star):
         for key, until in list(self._cooldown.items()):
             if until <= now:
                 self._cooldown.pop(key, None)
+        # 提示限频记录只保留 1 小时内的
+        for key, at in list(self._notice_at.items()):
+            if now - at > 3600:
+                self._notice_at.pop(key, None)
+
+    def _notice_allowed(self, key: str, now: float) -> bool:
+        """群里提示语的限频：同一 (群, 人) 在窗口内只提示一次。
+
+        否则对方在冷却期连问 5 次，群里就会刷 5 条「私聊说吧」——比不提示还吵。
+        """
+        if self.notice_cooldown_minutes <= 0:
+            return True
+        last = self._notice_at.get(key, 0.0)
+        if now - last < self.notice_cooldown_minutes * 60:
+            return False
+        self._notice_at[key] = now
+        return True
 
     def _is_exempt(self, event: AstrMessageEvent, user_id: str) -> bool:
         if user_id in self.whitelist:
@@ -174,17 +372,24 @@ class GroupDmGuidePlugin(Star):
                 )
             attempts.append(({"user_id": int(user_id), "message": payload}, "friend"))
 
-            for params, channel in attempts:
-                try:
-                    await bot.send_private_msg(**params)
-                    return channel
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug(
-                        "[群聊引导] 私聊尝试失败(channel=%s group_id=%s): %s",
-                        channel,
-                        params.get("group_id"),
-                        exc,
-                    )
+            rounds = 2 if self.retry_private_once else 1
+            for round_idx in range(rounds):
+                if round_idx:
+                    # 临时网络抖动很常见，隔一下再试一次
+                    await asyncio.sleep(1.5)
+                    logger.info("[群聊引导] 私聊没发出去，1.5 秒后重试一次: user=%s", user_id)
+                for params, channel in attempts:
+                    try:
+                        await bot.send_private_msg(**params)
+                        return channel
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            "[群聊引导] 私聊尝试失败(round=%s channel=%s group_id=%s): %s",
+                            round_idx + 1,
+                            channel,
+                            params.get("group_id"),
+                            exc,
+                        )
 
         # 非 aiocqhttp 平台，或上面都失败时用通用接口兜底
         umo = self._private_umo(event, user_id)
@@ -219,6 +424,16 @@ class GroupDmGuidePlugin(Star):
         now = time.time()
         self._prune(now)
         key = self._key(group_id, user_id)
+
+        # 只统计提问：日常闲聊直接放行（不计数、不转私聊、冷却期也不拦）
+        if self.only_questions:
+            is_q, q_reason = self._is_question(event)
+            if not is_q:
+                logger.debug(
+                    "[群聊引导] 非提问，放行: group=%s user=%s reason=%s",
+                    group_id, user_id, q_reason,
+                )
+                return
 
         # 冷却中：继续转私聊（而不是完全不理）
         if self._cooldown.get(key, 0.0) > now:
@@ -298,10 +513,14 @@ class GroupDmGuidePlugin(Star):
         if not text:
             return
 
+        # 字数只算「真正说出口」的部分：@昵称、引用内容、动作描写都不算
+        spoken_chars = count_spoken_chars(text)
+
         # 回答太短就不折腾了，正常留在群里
-        if self.min_redirect_chars and len(text) < self.min_redirect_chars:
+        if self.min_redirect_chars and spoken_chars < self.min_redirect_chars:
             logger.info(
-                "[群聊引导] 回答只有 %s 字（< %s），不转私聊: user=%s",
+                "[群聊引导] 回答有效字数 %s（原文 %s，< %s），不转私聊: user=%s",
+                spoken_chars,
                 len(text),
                 self.min_redirect_chars,
                 event.get_sender_id(),
@@ -318,7 +537,7 @@ class GroupDmGuidePlugin(Star):
             return
 
         if self.dry_run:
-            logger.info("[群聊引导] dry_run：本应私聊发送 %s 字给 %s", len(text), user_id)
+            logger.info("[群聊引导] dry_run：本应私聊发送 %s 字（有效 %s）给 %s", len(text), spoken_chars, user_id)
             return
 
         try:
@@ -327,35 +546,43 @@ class GroupDmGuidePlugin(Star):
             group_id = ""
 
         channel = await self._send_private(event, user_id, group_id, text)
+        # 提示语限频：同一个人短时间内只提示一次，避免反过来刷屏
+        notice_key = self._key(group_id, user_id)
+        can_notice = self._notice_allowed(notice_key, time.time())
 
         if channel:
             # 清空正文，群里不再重复这条回答
             response.completion_text = ""
-            if self.group_notice:
+            if self.group_notice and can_notice:
                 try:
                     await event.send(event.plain_result(self.group_notice))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[群聊引导] 群里提示发送失败: %s", exc)
+            elif self.group_notice:
+                logger.info("[群聊引导] 提示限频中，群里不再重复提示: user=%s", user_id)
             logger.info(
-                "[群聊引导] 已转私聊(%s): user=%s 字数=%s",
+                "[群聊引导] 已转私聊(%s): user=%s 字数=%s（有效 %s）",
                 "好友" if channel == "friend" else "临时会话",
                 user_id,
                 len(text),
+                spoken_chars,
             )
             return
 
         if self.intercept_on_fail:
             # 私聊发不出去：仍然拦截，只留一句提示
             response.completion_text = ""
-            notice = self.blocked_notice
+            notice = self.blocked_notice if can_notice else ""
             logger.info(
-                "[群聊引导] 私聊未送达，已拦截群回复: user=%s 字数=%s",
+                "[群聊引导] 私聊未送达，已拦截群回复: user=%s 字数=%s（有效 %s）提示=%s",
                 user_id,
                 len(text),
+                spoken_chars,
+                "发" if notice else "限频跳过",
             )
         else:
             # 退回群里正常回复
-            notice = self.fallback_notice
+            notice = self.fallback_notice if can_notice else ""
             logger.info("[群聊引导] 私聊未送达，退回群里回复: user=%s", user_id)
 
         if notice:
@@ -363,3 +590,5 @@ class GroupDmGuidePlugin(Star):
                 await event.send(event.plain_result(notice))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[群聊引导] 提示发送失败: %s", exc)
+
+

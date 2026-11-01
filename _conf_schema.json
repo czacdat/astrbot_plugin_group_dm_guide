@@ -1,4 +1,4 @@
-{
+﻿{
   "enable": {
     "description": "启用群聊高频提问引导",
     "hint": "关闭后插件完全不工作",
@@ -30,6 +30,19 @@
     "type": "bool",
     "default": true
   },
+  "notice_cooldown_minutes": {
+    "description": "群里提示语的限频（分钟）",
+    "hint": "同一个人在这个时间内只提示一次。0 = 不限频。默认 10 分钟——否则对方连问 5 次，群里会刷 5 条「私聊说吧」，反而比不提示更吵",
+    "type": "int",
+    "default": 10,
+    "slider": { "min": 0, "max": 120, "step": 5 }
+  },
+  "retry_private_once": {
+    "description": "私聊失败后重试一次",
+    "hint": "隔 1.5 秒再试一轮（应对临时网络抖动）。关闭则失败一次就直接走拦截或退回",
+    "type": "bool",
+    "default": true
+  },
   "blocked_notice": {
     "description": "拦截群回复时的提示",
     "hint": "私聊发不出去、群回复又被拦掉时，群里说这一句。留空则完全不说话",
@@ -54,6 +67,24 @@
     "type": "int",
     "default": 3,
     "slider": { "min": 2, "max": 20, "step": 1 }
+  },
+  "only_questions": {
+    "description": "只统计提问",
+    "hint": "开启后只有「提问」才计数；日常闲聊、感叹、吐槽完全不干预。关闭则退回旧行为（任何消息都计数）",
+    "type": "bool",
+    "default": true
+  },
+  "count_weak_questions": {
+    "description": "疑问词也算提问",
+    "hint": "开启后「什么/怎么/为什么/哪里/是不是」这类疑问词也当提问。默认关闭——群里「怎么这么好笑」这类感叹容易误判",
+    "type": "bool",
+    "default": false
+  },
+  "extra_question_words": {
+    "description": "额外提问关键词",
+    "hint": "自定义词，消息里出现任意一个就当作提问。例如「作业」「报错」「配置」",
+    "type": "list",
+    "default": []
   },
   "window_minutes": {
     "description": "统计时间窗（分钟）",
@@ -106,3 +137,4 @@
     "default": false
   }
 }
+

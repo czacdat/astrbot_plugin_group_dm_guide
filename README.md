@@ -68,8 +68,11 @@ AstrBot >= 4.24.0
 |---|---|---|---|
 | `enable` | bool | `True` | 总开关 |
 | `redirect_reply` | bool | `True` | **开**：把回答私聊发给提问者；**关**：改为在群里发引导语 |
+| `only_questions` | bool | `True` | **只统计提问**：日常闲聊不计数、不转私聊。关闭则任何消息都计数 |
+| `count_weak_questions` | bool | `False` | 疑问词（什么/怎么/为什么…）单独出现也算提问。默认关，避免「怎么这么好笑」误判 |
+| `extra_question_words` | list | `[]` | 额外提问关键词，命中即算提问（如 `作业`、`报错`） |
 | `enable_temp_session` | bool | `True` | 好友私聊失败时，尝试群临时会话 |
-| `min_redirect_chars` | int | `10` | 回答短于这个字数就不转私聊（0 = 不限制） |
+| `min_redirect_chars` | int | `10` | 回答短于这个字数就不转私聊（0 = 不限制）。**只算真正说出口的字数**，@昵称、引用、动作描写不计入 |
 | `intercept_on_fail` | bool | `True` | 私聊发不出去时也拦截群回复 |
 | `blocked_notice` | text | `（这些私聊说吧，群里不方便）` | 拦截时群里说的话，留空则不出声 |
 | `group_notice` | text | `（这里不方便说，私聊发你了）` | 转私聊成功后群里留的话 |
@@ -205,3 +208,4 @@ bot.send_private_msg(...)              OneBot v11 发私聊（带 group_id = 临
 ## License
 
 [MIT](LICENSE)
+
